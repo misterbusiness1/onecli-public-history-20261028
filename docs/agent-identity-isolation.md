@@ -25,6 +25,6 @@ Changing or unsetting `ONECLI_AGENT` cannot yield another identity. Supplying `-
 
 ## Qualification evidence
 
-The API regression first failed twice because agent bearers inherited an ambient administrative session. The corrected middleware/authentication suites and real-PostgreSQL configuration proof pass (38 tests). The web API-key-session tests pass (2), and container auth-mode selection tests pass (4). API typechecking passes. Native CLI command/API tests pass, including forbidden identity selection and no administrative key in an agent child. The full Rust gateway suite passes (527 tests). Full image qualification, independent review and real worker isolation remain explicit release gates.
+The API regression first failed twice because agent bearers inherited an ambient administrative session. The corrected middleware/authentication suites and real-PostgreSQL configuration proof pass (38 tests). The web session and missing/malformed/stale configuration tests pass (10), and container auth-mode selection tests pass (4). API and web typechecking pass. Native CLI command/API tests pass, including forbidden identity selection and no administrative key in an agent child. The full Rust gateway suite passes (527 tests). Full image qualification, independent review and real worker isolation remain explicit release gates.
 
 Do not roll back to unauthenticated production administration as an availability workaround. Preserve authenticated operator recovery access and hold affected worker execution if a qualified boundary cannot be maintained.
