@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { db, type Prisma } from "@onecli/db";
 import type { ApiEnv } from "../types";
-import { authMiddleware, requireProjectId } from "../middleware/auth";
+import { requireProjectId } from "../middleware/auth";
+import { containerAgentAuth } from "../middleware/container-agent-auth";
 import { GATEWAY_BASE_URL } from "../lib/env";
 import { loadCaCertificate } from "../lib/gateway-ca";
 import {
@@ -121,7 +122,7 @@ const markAgentConnected = async (projectId: string) => {
 
 export const containerConfigRoutes = () => {
   const app = new Hono<ApiEnv>();
-  app.use("*", authMiddleware);
+  app.use("*", containerAgentAuth);
 
   /**
    * GET /container-config
@@ -132,20 +133,24 @@ export const containerConfigRoutes = () => {
    */
   app.get("/", async (c) => {
     try {
+      const bound = c.get("containerAgent");
       const auth = c.get("auth");
-      const projectId = requireProjectId(auth);
+      const projectId = bound ? bound.projectId : requireProjectId(auth);
+      const organizationId = bound ? bound.organizationId : auth.organizationId;
 
       const agentIdentifier = c.req.query("agent");
 
-      let agent = agentIdentifier
-        ? await db.agent.findFirst({
-            where: { projectId, identifier: agentIdentifier },
-            select: { id: true, accessToken: true },
-          })
-        : await db.agent.findFirst({
-            where: { projectId, isDefault: true },
-            select: { id: true, accessToken: true },
-          });
+      let agent =
+        bound ??
+        (agentIdentifier
+          ? await db.agent.findFirst({
+              where: { projectId, identifier: agentIdentifier },
+              select: { id: true, accessToken: true },
+            })
+          : await db.agent.findFirst({
+              where: { projectId, isDefault: true },
+              select: { id: true, accessToken: true },
+            }));
 
       if (!agent && agentIdentifier) {
         // Fail loud: a container was started for an agent that isn't
@@ -207,7 +212,7 @@ export const containerConfigRoutes = () => {
       const injectableSecrets = await injectableSecretWhere(
         agent,
         projectId,
-        auth.organizationId,
+        organizationId,
       );
 
       // Detect auth mode from the agent's Anthropic secret metadata. OAuth

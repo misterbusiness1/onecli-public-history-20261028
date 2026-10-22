@@ -109,6 +109,7 @@ RUN cd packages/db && npm init -y > /dev/null 2>&1 && \
 
 # Entrypoint
 COPY --chown=node:node docker/entrypoint.sh ./entrypoint.sh
+COPY --chown=node:node docker/auth-mode.sh ./auth-mode.sh
 RUN chmod +x ./entrypoint.sh
 
 # Data directory for CA certs and persistent state

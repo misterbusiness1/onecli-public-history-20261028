@@ -1,8 +1,9 @@
 //! Gateway authentication for browser requests.
 //!
-//! Supports two modes controlled by the `AUTH_MODE` env var:
+//! Supports three modes controlled by the `AUTH_MODE` env var:
 //! - `local`: bypasses JWT validation, looks up the "local-admin" user directly.
 //! - `oauth` (default): validates a NextAuth session cookie JWT (HS256).
+//! - `api-key`: requires the explicit API-key path and rejects session fallback.
 
 use std::sync::OnceLock;
 
@@ -87,7 +88,8 @@ impl FromRequestParts<GatewayState> for AuthUser {
         }
 
         // Fall back to session auth (cookies / JWT)
-        let user_id = validate_request(&state.policy_engine.pool, &parts.headers).await?;
+        let user_id =
+            validate_request(&state.policy_engine.pool, &parts.headers, auth_mode()).await?;
 
         // Resolve default project for this user (org → first project).
         let project_id = db::find_default_project_id_by_user(&state.policy_engine.pool, &user_id)
@@ -140,9 +142,14 @@ async fn validate_api_key(pool: &PgPool, headers: &HeaderMap) -> Option<AuthUser
 
 /// Validate an incoming browser request and return the internal user ID.
 /// The caller resolves the project ID from the user's membership.
-async fn validate_request(pool: &PgPool, headers: &HeaderMap) -> Result<String, AuthError> {
-    match auth_mode() {
+async fn validate_request(
+    pool: &PgPool,
+    headers: &HeaderMap,
+    mode: &str,
+) -> Result<String, AuthError> {
+    match mode {
         "local" => validate_local(pool).await,
+        "api-key" => Err(AuthError("API key authentication required".to_string())),
         _ => validate_oauth(pool, headers).await,
     }
 }
@@ -239,6 +246,23 @@ fn parse_cookie<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn api_key_only_mode_never_falls_back_to_an_ambient_session() {
+        // No reachable database or browser credential: this mode must reject
+        // before any user/default-project resolution can take place.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://fixture@127.0.0.1:1/nonexistent")
+            .unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            validate_request(&pool, &HeaderMap::new(), "api-key"),
+        )
+        .await
+        .expect("API-key mode must not query an ambient user");
+        assert_eq!(result.unwrap_err().0, "API key authentication required");
+        pool.close().await;
+    }
 
     #[test]
     fn parse_cookie_finds_value() {

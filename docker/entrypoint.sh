@@ -4,7 +4,7 @@ set -e
 # Entrypoint for the all-in-one image (docker/Dockerfile): runs the gateway and
 # the Next.js web server together in one container. The hosted cloud edition
 # deploys its services as separate images and never uses this script — so the
-# auth mode here is only ever "local" or "oauth", never "cloud".
+# auth mode here is "local", "oauth" or "api-key", never "cloud".
 
 PRISMA="node /app/packages/db/node_modules/prisma/build/index.js"
 SCHEMA="--schema /app/packages/db/prisma/schema.prisma"
@@ -41,12 +41,8 @@ if [ -z "$GATEWAY_INTERNAL_SECRET" ]; then
 fi
 
 # Write runtime config for Next.js (auth mode is determined at container start,
-# not at build time, so the same image works for local and OAuth modes).
-if [ -n "$NEXTAUTH_SECRET" ]; then
-  AUTH_MODE="oauth"
-else
-  AUTH_MODE="local"
-fi
+# not at build time, so the same image supports all authenticated modes).
+AUTH_MODE="$(sh "$(dirname "$0")/auth-mode.sh")"
 export AUTH_MODE
 OAUTH_CONFIGURED="false"
 if [ -n "$GOOGLE_CLIENT_ID" ]; then

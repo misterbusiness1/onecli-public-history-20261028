@@ -84,6 +84,12 @@ export const auth = (options?: AuthOptions) => {
       }
     }
 
+    // A proxy agent credential is never a management credential. In local
+    // mode a failed agent bearer must not inherit the ambient admin session.
+    if (/^Bearer\s+aoc_/i.test(request.headers.get("authorization") ?? "")) {
+      return c.json(UNAUTHORIZED, 401);
+    }
+
     // 1. API key (project or org)
     const apiKeyAuth = await authenticateApiKey(request, requireProject);
     let authResult: AuthContext | null =

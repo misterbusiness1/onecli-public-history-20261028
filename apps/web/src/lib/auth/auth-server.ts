@@ -43,6 +43,7 @@ const ensureLocalUser = async () => {
 };
 
 export const getServerSessionImpl = async (): Promise<AuthUser | null> => {
+  if (getAuthMode() === "api-key") return null;
   if (getAuthMode() === "local") {
     await ensureLocalUser();
     return LOCAL_USER;

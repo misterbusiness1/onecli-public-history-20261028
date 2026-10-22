@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import { EDITION, GOOGLE_CLIENT_ID, NEXTAUTH_SECRET } from "@/lib/env";
 
 interface RuntimeConfig {
-  authMode: "cloud" | "oauth" | "local";
+  authMode: "cloud" | "oauth" | "local" | "api-key";
   oauthConfigured: boolean;
 }
 
