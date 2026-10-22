@@ -18,23 +18,38 @@ let cached: RuntimeConfig | null = null;
 /**
  * Reads the runtime config written by the Docker entrypoint at container start.
  * Cloud edition short-circuits (edition is a build-time decision).
- * Falls back to direct env-var checks for local development (no Docker).
+ * Missing or invalid configuration requires authentication. Ambient local
+ * administration is available only through the explicit development opt-in.
  */
 export const getRuntimeConfig = (): RuntimeConfig => {
   if (EDITION === "cloud") return CLOUD_CONFIG;
   if (cached) return cached;
 
+  const allowLocal = process.env.ONECLI_ALLOW_UNAUTHENTICATED_LOCAL === "true";
+
   try {
-    cached = JSON.parse(readFileSync(RUNTIME_CONFIG_PATH, "utf-8"));
-    return cached!;
+    const config: unknown = JSON.parse(
+      readFileSync(RUNTIME_CONFIG_PATH, "utf-8"),
+    );
+    if (
+      config &&
+      typeof config === "object" &&
+      "authMode" in config &&
+      "oauthConfigured" in config &&
+      typeof config.oauthConfigured === "boolean" &&
+      (config.authMode === "oauth" ||
+        config.authMode === "api-key" ||
+        (config.authMode === "local" && allowLocal))
+    ) {
+      cached = config as RuntimeConfig;
+      return cached;
+    }
   } catch {
-    // Local dev (no Docker) — read env vars directly.
-    // During Next.js build prerendering this also runs, but since all pages
-    // are client-rendered behind auth anyway, the fallback value is fine.
-    cached = {
-      authMode: NEXTAUTH_SECRET ? "oauth" : "local",
-      oauthConfigured: !!GOOGLE_CLIENT_ID,
-    };
-    return cached;
+    // Missing/unreadable config uses the authenticated fallback below.
   }
+  cached = {
+    authMode: allowLocal ? "local" : NEXTAUTH_SECRET ? "oauth" : "api-key",
+    oauthConfigured: !!GOOGLE_CLIENT_ID,
+  };
+  return cached;
 };
