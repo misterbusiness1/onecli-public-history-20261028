@@ -349,6 +349,33 @@ async fn resolve_rules(
     )
     .await?;
 
+    assemble_resolved_rules(
+        organization_id,
+        project_id,
+        resp,
+        hostname,
+        engine,
+        cache,
+        vault_rules,
+        connection_id,
+        request_path,
+    )
+    .await
+}
+
+/// Assemble request-specific rules only after the caller authenticated the token.
+#[expect(clippy::too_many_arguments)]
+async fn assemble_resolved_rules(
+    organization_id: &str,
+    project_id: &str,
+    resp: crate::connect::ConnectResponse,
+    hostname: &str,
+    engine: &PolicyEngine,
+    cache: &dyn CacheStore,
+    vault_rules: &[InjectionRule],
+    connection_id: Option<&str>,
+    request_path: Option<&str>,
+) -> Result<ResolveResult, crate::connect::ConnectError> {
     let secret_rules = resp.injection_rules; // from secrets (path-scoped)
     let mut app_rules: Vec<InjectionRule> = Vec::new();
     let mut pending_injections: Vec<crate::connect::PendingInjection> = Vec::new();
@@ -514,6 +541,60 @@ mod tests {
     use crate::connect::{seed_app_injection_cache, ConnectResponse};
     use crate::inject::{apply_injections, Injection};
 
+    // These fixtures exercise rule assembly. Authentication is tested through
+    // resolve_rules/resolve_from_cache separately and must never be mocked in
+    // the production path.
+    async fn assemble_fixture_rules(
+        ctx: &ProxyContext,
+        hostname: &str,
+        engine: &PolicyEngine,
+        cache: &dyn CacheStore,
+        vault_rules: &[InjectionRule],
+        connection_id: Option<&str>,
+        request_path: Option<&str>,
+    ) -> Result<ResolveResult, crate::connect::ConnectError> {
+        let org = ctx.organization_id.as_deref().unwrap();
+        let project = ctx.project_id.as_deref().unwrap();
+        let token = ctx.agent_token.as_deref().unwrap();
+        let key = format!("connect:{org}:{project}:{token}:{hostname}");
+        let resp = cache
+            .get::<ConnectResponse>(&key)
+            .await
+            .expect("seeded policy");
+        assemble_resolved_rules(
+            org,
+            project,
+            resp,
+            hostname,
+            engine,
+            cache,
+            vault_rules,
+            connection_id,
+            request_path,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn cached_rules_fail_closed_when_authentication_is_unavailable() {
+        let engine = PolicyEngine::test_stub();
+        engine.pool.close().await;
+        let store = crate::cache::create_store().await.unwrap();
+        seed_connect(
+            &store,
+            HOST,
+            vec![header_rule("*", "fixture-secret")],
+            vec![],
+        )
+        .await;
+        let result =
+            super::resolve_rules(&ctx(), HOST, &engine, &*store, &[], None, Some("/")).await;
+        assert!(matches!(
+            result,
+            Err(crate::connect::ConnectError::Internal(_))
+        ));
+    }
+
     const HOST: &str = "www.googleapis.com";
 
     fn ctx() -> ProxyContext {
@@ -629,7 +710,7 @@ mod tests {
         .await;
 
         // A calendar request gets the OAuth Bearer (the #428 fix)…
-        let res = resolve_rules(
+        let res = assemble_fixture_rules(
             &ctx(),
             HOST,
             &engine,
@@ -651,7 +732,7 @@ mod tests {
         assert_eq!(rules.connection_label.as_deref(), Some("Conn"));
 
         // A youtube request still gets the API key and no app metadata.
-        let res = resolve_rules(
+        let res = assemble_fixture_rules(
             &ctx(),
             HOST,
             &engine,
@@ -686,7 +767,7 @@ mod tests {
         .await;
 
         // The secret serves /gmail — the ambiguity is a best-effort no-op.
-        let res = resolve_rules(
+        let res = assemble_fixture_rules(
             &ctx(),
             HOST,
             &engine,
@@ -711,7 +792,7 @@ mod tests {
             vec![app_conn("c1", "gmail"), app_conn("c2", "gmail")],
         )
         .await;
-        let res = resolve_rules(
+        let res = assemble_fixture_rules(
             &ctx(),
             HOST,
             &engine,
@@ -738,7 +819,7 @@ mod tests {
         .await;
 
         // Stale explicit id on a secret-served path → proceed with the secret.
-        let res = resolve_rules(
+        let res = assemble_fixture_rules(
             &ctx(),
             HOST,
             &engine,
@@ -756,7 +837,7 @@ mod tests {
         assert!(path.contains("key=yt-key"));
 
         // On a path the secret does not serve, NotFound still escalates.
-        let res = resolve_rules(
+        let res = assemble_fixture_rules(
             &ctx(),
             HOST,
             &engine,
@@ -794,7 +875,7 @@ mod tests {
         )
         .await;
 
-        let res = resolve_rules(&ctx(), host, &engine, &*store, &[], None, Some("/token"))
+        let res = assemble_fixture_rules(&ctx(), host, &engine, &*store, &[], None, Some("/token"))
             .await
             .unwrap();
         let ResolveResult::Resolved { rules, .. } = res else {
@@ -824,7 +905,7 @@ mod tests {
         )
         .await;
 
-        let res = resolve_rules(
+        let res = assemble_fixture_rules(
             &ctx(),
             HOST,
             &engine,
@@ -860,7 +941,7 @@ mod tests {
         )
         .await;
 
-        let res = resolve_rules(&ctx(), HOST, &engine, &*store, &[], None, Some("/v1/x"))
+        let res = assemble_fixture_rules(&ctx(), HOST, &engine, &*store, &[], None, Some("/v1/x"))
             .await
             .unwrap();
         let ResolveResult::Resolved { rules, .. } = res else {
@@ -877,7 +958,7 @@ mod tests {
         seed_connect(&store, HOST, vec![], vec![]).await;
         let vault_rules = vec![header_rule("*", "Basic vault-cred")];
 
-        let res = resolve_rules(
+        let res = assemble_fixture_rules(
             &ctx(),
             HOST,
             &engine,

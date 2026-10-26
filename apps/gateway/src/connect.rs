@@ -1571,12 +1571,9 @@ pub(crate) async fn resolve(
     Ok(response)
 }
 
-/// Resolve with caching, using a known `project_id` to skip the agent DB
-/// query on cache hits. Designed for per-request resolution inside MITM
-/// tunnels where the agent identity is already known from CONNECT time.
-///
-/// On cache hit: zero DB queries (just a cache lookup).
-/// On cache miss: falls back to full resolution (agent query + DB).
+/// Resolve policy for a request inside an established MITM tunnel.
+/// Reauthenticate before reading cached policy: CONNECT-time identity is not
+/// proof that a token is still valid or belongs to the same scope now.
 pub(crate) async fn resolve_from_cache(
     organization_id: &str,
     project_id: &str,
@@ -1585,18 +1582,16 @@ pub(crate) async fn resolve_from_cache(
     policy_engine: &PolicyEngine,
     cache: &dyn CacheStore,
 ) -> Result<ConnectResponse, ConnectError> {
+    let agent = policy_engine.find_agent(agent_token).await?;
+    if agent.organization_id != organization_id || agent.project_id != project_id {
+        return Err(ConnectError::InvalidToken);
+    }
     let cache_key = format!("connect:{organization_id}:{project_id}:{agent_token}:{hostname}");
-
     if let Some(response) = cache.get::<ConnectResponse>(&cache_key).await {
         return Ok(response);
     }
-
-    debug!(host = %hostname, "resolve_from_cache: cache miss, querying DB");
-
-    let agent = policy_engine.find_agent(agent_token).await?;
     let response = policy_engine.resolve_uncached(&agent, hostname).await?;
     cache.set(&cache_key, &response, CACHE_TTL_SECS).await;
-
     Ok(response)
 }
 
@@ -1780,6 +1775,138 @@ mod tests {
         crate::cache::create_store().await.unwrap()
     }
 
+    #[tokio::test]
+    async fn cached_tunnel_policy_requires_live_authentication() {
+        let engine = PolicyEngine::test_stub();
+        // Closing the pool makes authentication unavailable deterministically.
+        engine.pool.close().await;
+        let cache = new_store().await;
+        let key = "connect:org:project:revoked-token:example.invalid";
+        cache
+            .set(key, &ConnectResponse::default(), CACHE_TTL_SECS)
+            .await;
+        let result = resolve_from_cache(
+            "org",
+            "project",
+            "revoked-token",
+            "example.invalid",
+            &engine,
+            cache.as_ref(),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(ConnectError::Internal(_))),
+            "cached policy must never substitute for live credential validation"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ONECLI_TEST_DATABASE_URL pointing to a disposable PostgreSQL database"]
+    async fn cached_tunnel_reauthenticates_rotated_tokens_and_scope() {
+        let url = std::env::var("ONECLI_TEST_DATABASE_URL").expect("explicit test database");
+        // One connection, temporary tables: no persistent fixtures or live rows.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TEMP TABLE organizations (id text, subscription_status text);\
+            CREATE TEMP TABLE projects (id text, organization_id text);\
+            CREATE TEMP TABLE agents (id text, name text, identifier text, project_id text, access_token text);\
+            INSERT INTO organizations VALUES ('org', 'free');\
+            INSERT INTO projects VALUES ('project', 'org');\
+            INSERT INTO agents VALUES ('agent', 'fixture', 'fixture', 'project', 'fixture-old');")
+            .execute(&pool).await.unwrap();
+        let mut engine = PolicyEngine::test_stub();
+        engine.pool = pool.clone();
+        let cache = new_store().await;
+        let response = ConnectResponse {
+            agent_id: Some("agent".into()),
+            ..Default::default()
+        };
+        for (org, project, token) in [
+            ("org", "project", "fixture-old"),
+            ("other-org", "project", "fixture-old"),
+            ("org", "other-project", "fixture-old"),
+            ("org", "project", "fixture-new"),
+        ] {
+            cache
+                .set(
+                    &format!("connect:{org}:{project}:{token}:example.invalid"),
+                    &response,
+                    CACHE_TTL_SECS,
+                )
+                .await;
+        }
+        assert!(resolve_from_cache(
+            "org",
+            "project",
+            "fixture-old",
+            "example.invalid",
+            &engine,
+            &*cache
+        )
+        .await
+        .is_ok());
+        for (org, project) in [("other-org", "project"), ("org", "other-project")] {
+            assert!(matches!(
+                resolve_from_cache(
+                    org,
+                    project,
+                    "fixture-old",
+                    "example.invalid",
+                    &engine,
+                    &*cache
+                )
+                .await,
+                Err(ConnectError::InvalidToken)
+            ));
+        }
+        sqlx::query("UPDATE agents SET access_token = 'fixture-new'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            resolve_from_cache(
+                "org",
+                "project",
+                "fixture-old",
+                "example.invalid",
+                &engine,
+                &*cache
+            )
+            .await,
+            Err(ConnectError::InvalidToken)
+        ));
+        assert!(resolve_from_cache(
+            "org",
+            "project",
+            "fixture-new",
+            "example.invalid",
+            &engine,
+            &*cache
+        )
+        .await
+        .is_ok());
+        sqlx::query("DELETE FROM agents")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            resolve_from_cache(
+                "org",
+                "project",
+                "fixture-new",
+                "example.invalid",
+                &engine,
+                &*cache
+            )
+            .await,
+            Err(ConnectError::InvalidToken)
+        ));
+        pool.close().await;
+    }
+
     // ── Injection pool (attach-model step 7) ────────────────────────────
     // The v2 selection is the WHOLE story for the ORG/PROJECT tiers: the old
     // per-agent grant tables became unread in step 10 and the all-mode merge
@@ -1907,7 +2034,7 @@ mod tests {
     // ── resolve_from_cache ────────────────────────────────────────────
 
     #[tokio::test]
-    async fn resolve_from_cache_hits_with_correct_key() {
+    async fn connect_policy_cache_uses_scoped_key() {
         let store = new_store().await;
         let response = ConnectResponse {
             intercept: true,
@@ -1938,9 +2065,7 @@ mod tests {
             )
             .await;
 
-        // resolve_from_cache should hit using the same key format.
-        // On cache hit it never touches PolicyEngine, so we can't pass one —
-        // but we can verify the key is correct by checking the cache directly.
+        // Verify serialization and key format independently of authentication.
         let cached: Option<ConnectResponse> = store
             .get(&format!(
                 "connect:{}:{}:{}:{}",
