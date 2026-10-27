@@ -159,6 +159,55 @@ mod tests {
     }
 
     #[test]
+    fn gmail_draft_read_permission_includes_details_without_write_authority() {
+        for path in [
+            "/gmail/v1/users/me/drafts",
+            "/gmail/v1/users/me/drafts?maxResults=100",
+            "/gmail/v1/users/me/drafts/r123",
+            "/gmail/v1/users/me/drafts/r123?format=raw",
+            "/gmail/v1/users/info@example.test/drafts/r123?format=minimal",
+        ] {
+            assert!(
+                matches(
+                    "gmail",
+                    &["list_drafts"],
+                    "gmail.googleapis.com",
+                    "GET",
+                    path
+                ),
+                "draft read must match: {path}"
+            );
+        }
+        for (method, path) in [
+            ("POST", "/gmail/v1/users/me/drafts"),
+            ("PUT", "/gmail/v1/users/me/drafts/r123"),
+            ("DELETE", "/gmail/v1/users/me/drafts/r123"),
+            ("POST", "/gmail/v1/users/me/drafts/send"),
+            ("POST", "/gmail/v1/users/me/messages/send"),
+            ("GET", "/gmail/v1/users/me/drafts-other/r123"),
+            ("GET", "/gmail/v1/users/me/messages/r123"),
+        ] {
+            assert!(
+                !matches(
+                    "gmail",
+                    &["list_drafts"],
+                    "gmail.googleapis.com",
+                    method,
+                    path
+                ),
+                "draft read must not match: {method} {path}"
+            );
+        }
+        assert!(!matches(
+            "gmail",
+            &["list_drafts"],
+            "example.test",
+            "GET",
+            "/gmail/v1/users/me/drafts/r123"
+        ));
+    }
+
+    #[test]
     fn named_tool_matches_exactly_its_endpoint_fanout() {
         // github create_issue = POST api.github.com /repos/*/*/issues.
         assert!(matches(

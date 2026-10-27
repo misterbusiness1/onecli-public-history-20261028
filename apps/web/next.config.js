@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 
 const isCloud = process.env.NEXT_PUBLIC_EDITION === "cloud";
@@ -175,6 +176,10 @@ const ONPREM_SLIM_ALIASES = {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  // Respect the process CPU allocation instead of sizing workers for the host.
+  experimental: {
+    cpus: availableParallelism(),
+  },
   poweredByHeader: false,
   compress: !isCloud, // Cloud: CloudFront handles compression at the edge; OSS: Next.js compresses
   serverExternalPackages: ["@onecli/db", "@1password/sdk"],
