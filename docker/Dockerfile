@@ -5,7 +5,9 @@
 # Stage 1a: Install cargo-chef
 # ──────────────────────────────────────────────
 FROM rust:1-alpine AS chef
-RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static && cargo install cargo-chef
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static \
+    && rustup component add rustfmt \
+    && cargo install cargo-chef
 WORKDIR /build
 
 # ──────────────────────────────────────────────
@@ -22,7 +24,7 @@ FROM chef AS gateway-builder
 COPY --from=planner /build/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY apps/gateway/ .
-RUN cargo build --release
+RUN cargo fmt --check && cargo build --release && cargo test --release
 
 # ──────────────────────────────────────────────
 # Stage 2: Prepare Node.js base
