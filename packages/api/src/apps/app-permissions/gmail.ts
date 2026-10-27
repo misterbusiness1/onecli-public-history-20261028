@@ -53,6 +53,7 @@ export const gmailPermissions: AppPermissionDefinition = {
           description: "List and read draft emails",
           hostPattern: "gmail.googleapis.com",
           pathPattern: "/gmail/v1/users/*/drafts",
+          aliasPatterns: ["/gmail/v1/users/*/drafts/*"],
           method: "GET",
         },
         {

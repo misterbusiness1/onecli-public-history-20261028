@@ -1245,7 +1245,8 @@
     "list_drafts": {
       "hostPattern": "gmail.googleapis.com",
       "paths": [
-        "/gmail/v1/users/*/drafts"
+        "/gmail/v1/users/*/drafts",
+        "/gmail/v1/users/*/drafts/*"
       ],
       "methods": [
         "GET"
