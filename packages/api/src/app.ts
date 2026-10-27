@@ -37,6 +37,7 @@ import { registerAppPermission } from "./apps/app-permissions";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler";
 import { healthRoutes } from "./routes/health";
 import { agentRoutes } from "./routes/agents";
+import { agentIdentityRoutes } from "./routes/agent-identity";
 import { secretRoutes } from "./routes/secrets";
 import {
   policyReflectRoutes,
@@ -137,6 +138,7 @@ export const createApiApp = (
   app.route("/health", healthRoutes(options?.version));
   app.route("/auth/session", authSessionRoutes());
   app.route("/agents", agentRoutes());
+  app.route("/agent-identity", agentIdentityRoutes());
   app.route("/secrets", secretRoutes());
   app.route("/user", userRoutes());
   app.route("/apps", appRoutes());
