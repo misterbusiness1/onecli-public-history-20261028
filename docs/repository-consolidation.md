@@ -4,9 +4,9 @@ The maintained fork is `misterbusiness1/onecli`. The platform remains at its exi
 
 ## Independent release channels
 
-Server image releases retain `vX.Y.Z` tags and the existing image matrix. The canonical fork may publish explicitly selected server tags; upstream release-please automation remains upstream-owned. No running server, gateway, agent credentials, service image or database is upgraded by source consolidation.
+Server image releases retain `vX.Y.Z` tags and the existing image matrix. Server image publishing and release-please automation remain upstream-owned; this consolidation does not enable fork server publishing. No running server, gateway, agent credentials, service image or database is upgraded by source consolidation.
 
-The CLI uses `cli/vX.Y.Z` tags, `apps/cli/VERSION`, and `publish-cli.yml`. The canonical CLI installer reads that VERSION, selects the namespaced CLI asset, verifies SHA256 checksums and the binary's local JSON help version, then atomically replaces the binary. It cannot mistake a server release for a CLI update. Release assets are built by `apps/cli/scripts/build-release.py` and are never overwritten silently. Existing version tags from the old repository are archival history, not active server tags.
+The CLI uses `cli/vX.Y.Z` tags, `apps/cli/VERSION`, and `publish-cli.yml`. The canonical CLI installer reads that VERSION, selects the namespaced CLI asset, verifies SHA256 checksums and the binary's local JSON help version, then atomically replaces the binary. It cannot mistake a server release for a CLI update. Release assets are built by `apps/cli/scripts/build-release.py` and are never overwritten silently. Existing version tags from the old repository are archival history, not active server tags. Publish a VERSION bump and its matching CLI tag together; verify the public assets immediately, before announcing an installer update or retiring its previous source.
 
 The Go module still identifies itself as `github.com/onecli/onecli-cli` for compatibility; all its packages resolve from the local checked-out module. Use the documented canonical Git source build or the canonical binary installer, not the upstream `go install ...@latest` command, to obtain fork changes.
 

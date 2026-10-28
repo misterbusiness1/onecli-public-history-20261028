@@ -20,9 +20,7 @@ const composeYml = read("docker/docker-compose.yml");
 
 // The two matrix lines (build + merge jobs). `include:` entries and the
 // arch axis don't match this shape, so the extraction can't over-collect.
-const serviceLines = [
-  ...publishYml.matchAll(/^\s*service: \[([^\]]+)\]\s*$/gm),
-];
+const serviceLines = [...publishYml.matchAll(/^\s*service: \[([^\]]+)\]\s*$/gm)];
 const services = new Set(
   serviceLines[0]?.[1].split(",").map((s) => s.trim()) ?? [],
 );
@@ -69,21 +67,15 @@ const jobBlocks = (yml) => {
   return blocks;
 };
 
-test("publishing is allowlisted to upstream and canonical fork; automatic release stays upstream-owned", () => {
-  for (const { name, body } of jobBlocks(publishYml)) {
-    assert.match(
-      body,
-      /^ {4}if: github\.repository == 'onecli\/onecli' \|\| github\.repository == 'misterbusiness1\/onecli'$/m,
-      `publish job ${name} has an unexpected repository guard`,
-    );
-  }
-  for (const { name, body } of jobBlocks(releaseYml)) {
+test("every job in both workflows carries the onecli/onecli repository guard", () => {
+  const all = [...jobBlocks(publishYml), ...jobBlocks(releaseYml)];
+  assert.ok(all.length >= 3);
+  for (const { name, body } of all)
     assert.match(
       body,
       /^ {4}if: github\.repository == 'onecli\/onecli'$/m,
-      `automatic release job ${name} lost its upstream ownership guard`,
+      `job "${name}" is missing the repository guard`,
     );
-  }
 });
 
 test("the latest tag is gated off prerelease refs", () => {
