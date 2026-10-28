@@ -15,7 +15,7 @@ To ensure a positive and inclusive environment, please read our [Code of Conduct
 ### Local Development Setup
 
 ```bash
-git clone https://github.com/onecli/onecli.git
+git clone https://github.com/misterbusiness1/onecli.git
 cd onecli
 pnpm install
 pnpm dev

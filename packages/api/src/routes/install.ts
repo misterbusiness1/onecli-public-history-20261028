@@ -133,7 +133,7 @@ const buildScript = (
     "",
     "# ── Install OneCLI CLI ──",
     'echo "  Installing OneCLI CLI..."',
-    "curl -fsSL https://onecli.sh/cli/install 2>/dev/null | sh >/dev/null 2>&1",
+    "curl -fsSL https://raw.githubusercontent.com/misterbusiness1/onecli/main/apps/cli/scripts/install.sh 2>/dev/null | sh >/dev/null 2>&1",
     'export PATH="$HOME/.local/bin:$PATH"',
     "",
     "# ── Configure and authenticate CLI ──",

@@ -1,0 +1,47 @@
+name: Publish CLI
+on:
+  push:
+    tags: ["cli/v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing CLI tag, for example cli/v2.11.1"
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: github.repository == 'misterbusiness1/onecli'
+    runs-on: ubuntu-latest
+    env:
+      CLI_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/cli/go.mod
+          cache-dependency-path: apps/cli/go.sum
+      - name: Validate CLI tag and source
+        run: |
+          test "$CLI_TAG" = "cli/v$(cat apps/cli/VERSION)"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$CLI_TAG^{commit}")"
+      - name: CLI quality
+        working-directory: apps/cli
+        run: |
+          go vet ./...
+          go test -race ./...
+      - name: Build six CLI archives and checksums
+        run: python3 apps/cli/scripts/build-release.py --tag "$CLI_TAG" --output cli-dist
+      - name: Publish independent CLI release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$CLI_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to overwrite immutable assets" >&2
+            exit 1
+          fi
+          gh release create "$CLI_TAG" cli-dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false --title "OneCLI CLI $(cat apps/cli/VERSION)" --notes "Standalone CLI artifacts from the consolidated apps/cli source. Server images use a separate release channel."

@@ -76,7 +76,7 @@ export const InstallContent = () => {
   // Self-host / OSS: the one-liner endpoint is cloud-only, so spell the same
   // setup out manually (with this workspace's real key once loaded).
   const manualCommand = [
-    "curl -fsSL onecli.sh/cli/install | sh",
+    "curl -fsSL https://raw.githubusercontent.com/misterbusiness1/onecli/main/apps/cli/scripts/install.sh | sh",
     ...(installInfo
       ? [`onecli config set api-host ${installInfo.apiUrl}`]
       : []),

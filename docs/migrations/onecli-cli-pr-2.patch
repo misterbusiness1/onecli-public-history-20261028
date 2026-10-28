@@ -1,0 +1,327 @@
+diff --git a/cmd/onecli/main.go b/cmd/onecli/main.go
+index 2f5be98..4242627 100644
+--- a/cmd/onecli/main.go
++++ b/cmd/onecli/main.go
+@@ -5,6 +5,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"os"
++	"regexp"
+ 	"strings"
+ 
+ 	"github.com/alecthomas/kong"
+@@ -159,15 +160,32 @@ func newClient() (*api.Client, error) {
+ 	return api.New(config.APIHost(), key), nil
+ }
+ 
+-// newRunClient selects capability-only Paperclip run authentication when the
+-// complete server-minted context is present. Crucially, that path never calls
+-// CredentialsDir or Store.Load. With no Paperclip context this is an explicit
+-// operator invocation and retains the stored management-key behavior.
++// newRunClient selects assigned-agent capability authentication independently
++// of ordinary Paperclip run metadata. Explicit runtime bindings still require
++// their complete server-minted context; neither mode loads operator credentials.
+ func newRunClient() (*api.Client, error) {
++	token, agentScoped := os.LookupEnv("ONECLI_AGENT_TOKEN")
++	_, bindingSupplied := os.LookupEnv("PAPERCLIP_ONECLI_RUNTIME_BINDING")
++	if agentScoped {
++		if !regexp.MustCompile(`^aoc_[a-f0-9]{64}$`).MatchString(token) {
++			return nil, fmt.Errorf("invalid ONECLI_AGENT_TOKEN")
++		}
++		// Ordinary run/company/agent IDs are metadata, not a runtime-binding
++		// capability. An assigned token is sufficient when no binding was supplied.
++		if !bindingSupplied {
++			return api.NewAgentRun(config.APIHost(), token, nil), nil
++		}
++	}
+ 	headers, bound, err := api.PaperclipRunHeadersFromEnv()
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	if bindingSupplied && !bound {
++		return nil, fmt.Errorf("incomplete Paperclip run context: supplied runtime binding must be nonempty and complete")
++	}
++	if agentScoped {
++		return api.NewAgentRun(config.APIHost(), token, headers), nil
++	}
+ 	if bound {
+ 		return api.NewPaperclipRun(config.APIHost(), headers), nil
+ 	}
+diff --git a/cmd/onecli/run.go b/cmd/onecli/run.go
+index 774fc3f..a99a877 100644
+--- a/cmd/onecli/run.go
++++ b/cmd/onecli/run.go
+@@ -363,6 +363,13 @@ func buildChildEnv(current []string, serverEnv map[string]string, caPath string)
+ 		stripKeys[k] = struct{}{}
+ 	}
+ 
++	agentScoped := slices.ContainsFunc(current, func(entry string) bool {
++		return strings.HasPrefix(entry, "ONECLI_AGENT_TOKEN=")
++	})
++	if agentScoped {
++		stripKeys["ONECLI_API_KEY"] = struct{}{}
++	}
++
+ 	out := make([]string, 0, len(current)+len(serverEnv)+6)
+ 	for _, kv := range current {
+ 		i := strings.IndexByte(kv, '=')
+@@ -389,6 +396,9 @@ func buildChildEnv(current []string, serverEnv map[string]string, caPath string)
+ 	// Append server-provided env (HTTPS_PROXY, credentials, etc.),
+ 	// excluding any CA trust keys we'll override with local paths.
+ 	for k, v := range serverEnv {
++		if agentScoped && k == "ONECLI_API_KEY" {
++			continue
++		}
+ 		if _, skip := localCAKeys[k]; skip {
+ 			continue
+ 		}
+diff --git a/cmd/onecli/run_agent_token_test.go b/cmd/onecli/run_agent_token_test.go
+new file mode 100644
+index 0000000..50930de
+--- /dev/null
++++ b/cmd/onecli/run_agent_token_test.go
+@@ -0,0 +1,211 @@
++package main
++
++import (
++	"context"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"strings"
++	"testing"
++)
++
++func TestRunClientUsesOnlyAssignedAgentToken(t *testing.T) {
++	token := "aoc_" + strings.Repeat("1", 64)
++	configCalls := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/v1/health" {
++			w.Write([]byte(`{"ok":true}`))
++			return
++		}
++		if r.URL.Path != "/v1/container-config" {
++			t.Errorf("unexpected management request: %s", r.URL.Path)
++			w.WriteHeader(403)
++			return
++		}
++		configCalls++
++		if r.Header.Get("Authorization") != "Bearer "+token {
++			t.Error("run did not use its assigned agent credential")
++			w.WriteHeader(401)
++			return
++		}
++		if r.URL.Query().Get("agent") == "cto" {
++			w.WriteHeader(403)
++			fmt.Fprint(w, `{"error":"Agent credential scope mismatch"}`)
++			return
++		}
++		fmt.Fprint(w, `{"env":{},"caCertificate":"","caCertificateContainerPath":""}`)
++	}))
++	defer server.Close()
++	t.Setenv("ONECLI_API_HOST", server.URL)
++	t.Setenv("ONECLI_API_KEY", "oc_synthetic_management_key_must_not_be_used")
++	t.Setenv("ONECLI_AGENT_TOKEN", token)
++	client, err := newRunClient()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = client.GetContainerConfig(context.Background(), ""); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = client.GetContainerConfig(context.Background(), "cto"); err == nil {
++		t.Fatal("identity override should remain rejected by the server")
++	}
++	if _, err = client.ListAgents(context.Background(), ""); err == nil {
++		t.Fatal("agent-only client must reject management requests before networking")
++	}
++	if configCalls != 2 {
++		t.Fatalf("config requests=%d, expected2", configCalls)
++	}
++}
++
++func TestRunClientInvalidAgentTokenNeverFallsBack(t *testing.T) {
++	for _, token := range []string{"", "aoc_bad", "oc_synthetic_admin"} {
++		t.Run(fmt.Sprintf("length%d", len(token)), func(t *testing.T) {
++			t.Setenv("ONECLI_AGENT_TOKEN", token)
++			t.Setenv("ONECLI_API_KEY", "oc_synthetic_management")
++			if _, err := newRunClient(); err == nil {
++				t.Fatal("invalid supplied token must not fall back to management login")
++			}
++		})
++	}
++}
++
++func TestAgentScopedChildDoesNotReceiveManagementKey(t *testing.T) {
++	token := "aoc_" + strings.Repeat("1", 64)
++	env := buildChildEnv([]string{"ONECLI_AGENT_TOKEN=" + token, "ONECLI_API_KEY=oc_parent_fixture", "PATH=/usr/bin"}, map[string]string{"ONECLI_API_KEY": "oc_server_fixture"}, "")
++	for _, entry := range env {
++		if strings.HasPrefix(entry, "ONECLI_API_KEY=") {
++			t.Fatal("management key leaked into agent child")
++		}
++	}
++	found := false
++	for _, entry := range env {
++		if entry == "ONECLI_AGENT_TOKEN="+token {
++			found = true
++		}
++	}
++	if !found {
++		t.Fatal("assigned agent credential was lost")
++	}
++}
++
++func TestAgentTokenPreservesPaperclipContextAndRejectsPartialContext(t *testing.T) {
++	token := "aoc_" + strings.Repeat("2", 64)
++	t.Setenv("ONECLI_AGENT_TOKEN", token)
++	t.Setenv("ONECLI_API_KEY", "oc_management_must_not_be_used")
++	for name, value := range map[string]string{"PAPERCLIP_ONECLI_RUNTIME_BINDING": "binding-fixture", "PAPERCLIP_RUN_ID": "run-fixture", "PAPERCLIP_AGENT_ID": "agent-fixture", "PAPERCLIP_COMPANY_ID": "company-fixture"} {
++		t.Setenv(name, value)
++	}
++	calls := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		calls++
++		if r.URL.Path != "/v1/container-config" || r.Header.Get("Authorization") != "Bearer "+token || r.Header.Get("X-Paperclip-OneCLI-Run-Binding") != "binding-fixture" || r.Header.Get("X-Paperclip-Company-Id") != "company-fixture" {
++			t.Error("assigned credential or complete run binding was lost")
++		}
++		fmt.Fprint(w, `{"env":{},"caCertificate":"","caCertificateContainerPath":""}`)
++	}))
++	defer server.Close()
++	t.Setenv("ONECLI_API_HOST", server.URL)
++	client, err := newRunClient()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = client.GetContainerConfig(context.Background(), "worker"); err != nil {
++		t.Fatal(err)
++	}
++	if calls != 1 {
++		t.Fatalf("requests=%d want exactly one configuration request", calls)
++	}
++	t.Setenv("PAPERCLIP_AGENT_ID", "")
++	if _, err = newRunClient(); err == nil {
++		t.Fatal("token must not bypass partial run-context rejection")
++	}
++}
++
++// Paperclip's normal model adapters provide these three metadata values without
++// minting a separate OneCLI runtime-binding capability.
++func TestAssignedAgentAcceptsOrdinaryPaperclipMetadata(t *testing.T) {
++	t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", "")
++	if err := os.Unsetenv("PAPERCLIP_ONECLI_RUNTIME_BINDING"); err != nil {
++		t.Fatal(err)
++	}
++	for name, value := range map[string]string{"PAPERCLIP_RUN_ID": "run-fixture", "PAPERCLIP_AGENT_ID": "agent-fixture", "PAPERCLIP_COMPANY_ID": "company-fixture"} {
++		t.Setenv(name, value)
++	}
++	token := "aoc_" + strings.Repeat("3", 64)
++	t.Setenv("ONECLI_AGENT_TOKEN", token)
++	t.Setenv("ONECLI_API_KEY", "oc_management_must_not_be_used")
++	calls := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		calls++
++		if r.Header.Get("Authorization") != "Bearer "+token {
++			t.Error("assigned token was not selected")
++		}
++		if r.Header.Get("X-Paperclip-OneCLI-Run-Binding") != "" {
++			t.Error("runtime binding was fabricated")
++		}
++		if r.URL.Path != "/v1/container-config" {
++			t.Error("unexpected management request")
++		}
++		fmt.Fprint(w, `{"env":{},"caCertificate":"","caCertificateContainerPath":""}`)
++	}))
++	defer server.Close()
++	t.Setenv("ONECLI_API_HOST", server.URL)
++	client, err := newRunClient()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = client.GetContainerConfig(context.Background(), ""); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = client.ListAgents(context.Background(), ""); err == nil {
++		t.Fatal("agent client must refuse management")
++	}
++	if calls != 1 {
++		t.Fatalf("requests=%d want1", calls)
++	}
++}
++func TestAssignedAgentExplicitEmptyRuntimeBindingFailsClosed(t *testing.T) {
++	t.Setenv("ONECLI_AGENT_TOKEN", "aoc_"+strings.Repeat("4", 64))
++	for _, name := range []string{"PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
++		t.Setenv(name, "")
++	}
++	for _, value := range []string{"", "   "} {
++		t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", value)
++		if _, err := newRunClient(); err == nil {
++			t.Fatal("explicit empty runtime binding must fail closed")
++		}
++	}
++}
++func TestOrdinaryPaperclipMetadataWithoutAssignedTokenCannotUseAdmin(t *testing.T) {
++	t.Setenv("ONECLI_AGENT_TOKEN", "")
++	if err := os.Unsetenv("ONECLI_AGENT_TOKEN"); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", "")
++	if err := os.Unsetenv("PAPERCLIP_ONECLI_RUNTIME_BINDING"); err != nil {
++		t.Fatal(err)
++	}
++	for name, value := range map[string]string{"PAPERCLIP_RUN_ID": "run-fixture", "PAPERCLIP_AGENT_ID": "agent-fixture", "PAPERCLIP_COMPANY_ID": "company-fixture"} {
++		t.Setenv(name, value)
++	}
++	t.Setenv("ONECLI_API_KEY", "oc_management_must_not_be_used")
++	if _, err := newRunClient(); err == nil {
++		t.Fatal("missing assigned token must not fall back to admin")
++	}
++}
++
++func TestExplicitEmptyRuntimeBindingCannotUseOperatorFallback(t *testing.T) {
++	t.Setenv("ONECLI_AGENT_TOKEN", "")
++	if err := os.Unsetenv("ONECLI_AGENT_TOKEN"); err != nil {
++		t.Fatal(err)
++	}
++	for _, name := range []string{"PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
++		t.Setenv(name, "")
++	}
++	t.Setenv("PAPERCLIP_ONECLI_RUNTIME_BINDING", "")
++	t.Setenv("ONECLI_API_KEY", "oc_management_must_not_be_used")
++	if _, err := newRunClient(); err == nil {
++		t.Fatal("explicit empty binding must not select operator credentials")
++	}
++}
+diff --git a/cmd/onecli/run_test.go b/cmd/onecli/run_test.go
+index 135e34b..be12dab 100644
+--- a/cmd/onecli/run_test.go
++++ b/cmd/onecli/run_test.go
+@@ -100,6 +100,9 @@ func TestRunCmdRejectsPartialPaperclipContextBeforeNetwork(t *testing.T) {
+ func TestRunCmdOperatorModeRetainsStoredKeyAuthentication(t *testing.T) {
+ 	for _, name := range []string{"PAPERCLIP_ONECLI_RUNTIME_BINDING", "PAPERCLIP_RUN_ID", "PAPERCLIP_AGENT_ID", "PAPERCLIP_COMPANY_ID"} {
+ 		t.Setenv(name, "")
++		if err := os.Unsetenv(name); err != nil {
++			t.Fatal(err)
++		}
+ 	}
+ 	t.Setenv("ONECLI_API_KEY", "operator-key")
+ 	var authorizations []string
+diff --git a/internal/api/client.go b/internal/api/client.go
+index 343d303..cb180fe 100644
+--- a/internal/api/client.go
++++ b/internal/api/client.go
+@@ -61,6 +61,14 @@ func NewPaperclipRun(baseURL string, headers http.Header) *Client {
+ 	}
+ }
+ 
++// NewAgentRun retains the restricted run-only transport and optional complete
++// Paperclip context while authenticating with an assigned agent capability.
++func NewAgentRun(baseURL, token string, headers http.Header) *Client {
++	client := NewPaperclipRun(baseURL, headers)
++	client.apiKey = token
++	return client
++}
++
+ // newWithPrefix creates a client with a pre-set prefix (for testing).
+ func newWithPrefix(baseURL, apiKey, prefix string) *Client {
+ 	return &Client{
