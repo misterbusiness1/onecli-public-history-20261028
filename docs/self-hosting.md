@@ -20,7 +20,7 @@ Put the three required secrets in `docker/.env` — **beside the compose
 file**, which is where compose reads them — then bring it up:
 
 ```bash
-git clone https://github.com/onecli/onecli.git && cd onecli/docker
+git clone https://github.com/misterbusiness1/onecli.git && cd onecli/docker
 cat > .env <<EOF
 SECRET_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64)
 GATEWAY_INTERNAL_SECRET=$(head -c 32 /dev/urandom | base64)

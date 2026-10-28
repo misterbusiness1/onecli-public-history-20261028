@@ -30,9 +30,9 @@
 ### Self-hosted
 
 ```bash
-git clone https://github.com/onecli/onecli.git && cd onecli
+git clone https://github.com/misterbusiness1/onecli.git && cd onecli
 pnpm install
-pnpm run setup
+pnpm run setup --mode=source
 ```
 
 Open http://localhost:10254
@@ -99,7 +99,7 @@ Agents run on your own infrastructure. The runner is outbound-only and holds no 
 ## Local Development
 
 ```bash
-git clone https://github.com/onecli/onecli.git && cd onecli
+git clone https://github.com/misterbusiness1/onecli.git && cd onecli
 mise install
 pnpm install
 pnpm dev
@@ -124,3 +124,7 @@ testing and evaluation, and requires a subscription for production use.
 Everything else is Apache-2.0 and can be self-hosted in production with no
 commercial license. [LICENSE-ENTERPRISE](LICENSE-ENTERPRISE) carries the
 authoritative list of licensed paths.
+
+## One repository, separate server and client components
+
+The canonical fork is `misterbusiness1/onecli`. The Go terminal client is in [apps/cli](apps/cli), with its original Git history preserved as a merge ancestor. CLI tags (`cli/vX.Y.Z`) are separate from server image tags (`vX.Y.Z`). For this fork, build services from the checkout with `pnpm run setup --mode=source`; upstream image defaults remain deliberate and do not imply published upstream images contain fork changes. See [consolidation and pending work](docs/repository-consolidation.md).

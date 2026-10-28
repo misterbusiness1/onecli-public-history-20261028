@@ -39,8 +39,8 @@ ENV_FILE="$INSTALL_DIR/.env"
 # v2 split the all-in-one container into web + gateway + api services.
 # Installs pinned to a pre-2.0 version keep receiving the compose that matches
 # those images (docker-compose.legacy.yml, frozen alongside them).
-COMPOSE_URL_NEW="https://raw.githubusercontent.com/onecli/onecli/main/docker/docker-compose.yml"
-COMPOSE_URL_LEGACY="https://raw.githubusercontent.com/onecli/onecli/main/docker/docker-compose.legacy.yml"
+COMPOSE_URL_NEW="https://raw.githubusercontent.com/${ONECLI_SOURCE_REPO:-misterbusiness1/onecli}/${ONECLI_SOURCE_REF:-main}/docker/docker-compose.yml"
+COMPOSE_URL_LEGACY="https://raw.githubusercontent.com/${ONECLI_SOURCE_REPO:-misterbusiness1/onecli}/${ONECLI_SOURCE_REF:-main}/docker/docker-compose.legacy.yml"
 PROJECT_NAME="onecli"
 
 # Which compose file serves this version: a numeric major below 2 gets the

@@ -127,7 +127,7 @@ const migrationSteps = (): string[] => [
   "",
   "# ── Ensure latest OneCLI CLI ──",
   'echo "  Updating OneCLI CLI..."',
-  'CLI_ERR=$(curl -fsSL https://onecli.sh/cli/install 2>/dev/null | sh 2>&1) || echo "  Warning: CLI update failed: $CLI_ERR"',
+  'CLI_ERR=$(curl -fsSL https://raw.githubusercontent.com/misterbusiness1/onecli/main/apps/cli/scripts/install.sh 2>/dev/null | sh 2>&1) || echo "  Warning: CLI update failed: $CLI_ERR"',
   'export PATH="$HOME/.local/bin:$PATH"',
   "",
   'if command -v onecli >/dev/null 2>&1 && [ -n "$CURRENT_HOST" ] && [ -n "$LOCAL_API_KEY" ]; then',

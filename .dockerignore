@@ -49,3 +49,6 @@ coverage
 **/coverage
 **/*.pem
 npm-debug.log*
+
+# Go client source/release artifacts are not server image inputs.
+apps/cli

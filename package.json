@@ -23,7 +23,10 @@
     "db:migrate": "dotenv -e .env -- pnpm --filter @onecli/db db:migrate",
     "db:studio": "dotenv -e .env -- pnpm --filter @onecli/db prisma studio",
     "test": "turbo run test",
-    "prepare": "husky"
+    "prepare": "husky",
+    "cli:build": "cd apps/cli && go build ./cmd/onecli",
+    "cli:test": "cd apps/cli && go test -race ./...",
+    "cli:vet": "cd apps/cli && go vet ./..."
   },
   "devDependencies": {
     "@clack/prompts": "1.7.0",
