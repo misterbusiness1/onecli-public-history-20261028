@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/alecthomas/kong"
@@ -159,14 +160,31 @@ func newClient() (*api.Client, error) {
 	return api.New(config.APIHost(), key), nil
 }
 
-// newRunClient selects capability-only Paperclip run authentication when the
-// complete server-minted context is present. Crucially, that path never calls
-// CredentialsDir or Store.Load. With no Paperclip context this is an explicit
-// operator invocation and retains the stored management-key behavior.
+// newRunClient selects assigned-agent capability authentication independently
+// of ordinary Paperclip run metadata. Explicit runtime bindings still require
+// their complete server-minted context; neither mode loads operator credentials.
 func newRunClient() (*api.Client, error) {
+	token, agentScoped := os.LookupEnv("ONECLI_AGENT_TOKEN")
+	_, bindingSupplied := os.LookupEnv("PAPERCLIP_ONECLI_RUNTIME_BINDING")
+	if agentScoped {
+		if !regexp.MustCompile(`^aoc_[a-f0-9]{64}$`).MatchString(token) {
+			return nil, fmt.Errorf("invalid ONECLI_AGENT_TOKEN")
+		}
+		// Ordinary run/company/agent IDs are metadata, not a runtime-binding
+		// capability. An assigned token is sufficient when no binding was supplied.
+		if !bindingSupplied {
+			return api.NewAgentRun(config.APIHost(), token, nil), nil
+		}
+	}
 	headers, bound, err := api.PaperclipRunHeadersFromEnv()
 	if err != nil {
 		return nil, err
+	}
+	if bindingSupplied && !bound {
+		return nil, fmt.Errorf("incomplete Paperclip run context: supplied runtime binding must be nonempty and complete")
+	}
+	if agentScoped {
+		return api.NewAgentRun(config.APIHost(), token, headers), nil
 	}
 	if bound {
 		return api.NewPaperclipRun(config.APIHost(), headers), nil
